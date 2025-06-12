@@ -3,6 +3,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 import requests
 from starlette.websockets import WebSocketState
+from app.constants import PRODUCER_URL
 
 app = FastAPI()
 
@@ -14,10 +15,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-PRODUCER_URL = "http://localhost:8001"
+@app.get("/health")
+def health_check():
+    return {"status": "ok"}
 
 @app.websocket("/ws/{camera_name}")
 async def websocket_endpoint(websocket: WebSocket, camera_name: str):
+    print("ws://{camera_name} conectado")
     await websocket.accept()
     print(f"📡 WebSocket conectado: {camera_name}")
 
@@ -32,6 +36,7 @@ async def websocket_endpoint(websocket: WebSocket, camera_name: str):
             "sdp": message["sdp"],
             "type": message["type"]
         })
+        print('🔄 Respuesta del productor recibida.')
 
         answer = response.json()
         await websocket.send_text(json.dumps(answer))
