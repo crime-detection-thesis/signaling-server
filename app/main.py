@@ -1,9 +1,16 @@
 import json
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-import requests
 from starlette.websockets import WebSocketState
 from app.constants import PRODUCER_URL
+import httpx
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
+
+class CameraRequest(BaseModel):
+    camera_name: str
+    rtsp_url: str
+
 
 app = FastAPI()
 
@@ -19,29 +26,36 @@ app.add_middleware(
 def health_check():
     return {"status": "ok"}
 
+@app.post("/start-camera")
+async def start_camera(data: CameraRequest):
+    camera_name = data.camera_name
+    rtsp_url = data.rtsp_url
+
+    async with httpx.AsyncClient() as client:
+        await client.post(f"{PRODUCER_URL}/connect-camera", json={
+            "camera_name": camera_name,
+            "rtsp_url": rtsp_url
+        })
+
+    return JSONResponse(content={"status": "started"}, status_code=200)
+
 @app.websocket("/ws/{camera_name}")
 async def websocket_endpoint(websocket: WebSocket, camera_name: str):
-    print("ws://{camera_name} conectado")
     await websocket.accept()
-    print(f"📡 WebSocket conectado: {camera_name}")
 
     try:
         data = await websocket.receive_text()
         message = json.loads(data)
 
-        print("📨 Oferta recibida. Reenviando al productor...")
-
-        response = requests.post(f"{PRODUCER_URL}/negotiate", json={
-            "camera_name": camera_name,
-            "sdp": message["sdp"],
-            "type": message["type"]
-        })
-        print('🔄 Respuesta del productor recibida.')
+        async with httpx.AsyncClient() as client:
+            response = await client.post(f"{PRODUCER_URL}/negotiate", json={
+                "camera_name": camera_name,
+                "sdp": message["sdp"],
+                "type": message["type"]
+            })
 
         answer = response.json()
         await websocket.send_text(json.dumps(answer))
-
-        print(f"✅ Respuesta enviada al cliente: {camera_name}")
 
         while True:
             msg = await websocket.receive_text()
