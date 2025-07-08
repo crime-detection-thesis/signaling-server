@@ -1,19 +1,12 @@
-import json
+import asyncio, json
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from starlette.websockets import WebSocketState
-from app.constants import PRODUCER_URL
+import websockets
 import httpx
-from fastapi.responses import JSONResponse
-from pydantic import BaseModel
 
-class CameraRequest(BaseModel):
-    camera_name: str
-    rtsp_url: str
-
+from app.constants import PRODUCER_WS_URL, PRODUCER_HTTP_URL
 
 app = FastAPI()
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -27,47 +20,82 @@ def health_check():
     return {"status": "ok"}
 
 @app.post("/start-camera")
-async def start_camera(data: CameraRequest):
-    camera_name = data.camera_name
-    rtsp_url = data.rtsp_url
+async def start_camera(data: dict):
+    timeout = httpx.Timeout(60.0, connect=60.0)
+    
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        try:
+            response = await client.post(
+                f"{PRODUCER_HTTP_URL}/connect-camera",
+                json={"camera_id": data["camera_id"], "rtsp_url": data["rtsp_url"]},
+                timeout=60.0
+            )
+            response.raise_for_status()  # Lanza excepción para códigos 4XX/5XX
+            return {"status": "started"}
+        except httpx.RequestError as e:
+            print(f"Error al conectar con el productor: {e}")
+            return {"status": "error", "message": str(e)}, 500
+        except Exception as e:
+            print(f"Error inesperado: {e}")
+            return {"status": "error", "message": "Error interno del servidor"}, 500
 
-    async with httpx.AsyncClient() as client:
-        await client.post(f"{PRODUCER_URL}/connect-camera", json={
-            "camera_name": camera_name,
-            "rtsp_url": rtsp_url
-        })
+@app.websocket("/ws/{camera_id}")
+async def websocket_endpoint(sign_ws: WebSocket, camera_id: int):
+    await sign_ws.accept()
+    prod_ws = await websockets.connect(f"{PRODUCER_WS_URL}/ws/{camera_id}")
 
-    return JSONResponse(content={"status": "started"}, status_code=200)
+    async def client_to_producer():
+        try:
+            async for message in sign_ws.iter_text():
+                await prod_ws.send(message)
+        except WebSocketDisconnect:
+            pass
+        except Exception as e:
+            print(f"Error forwarding client→producer: {e}")
 
-@app.websocket("/ws/{camera_name}")
-async def websocket_endpoint(websocket: WebSocket, camera_name: str):
-    await websocket.accept()
+    async def producer_to_client():
+        try:
+            async for message in prod_ws:
+                await sign_ws.send_text(message)
+        except Exception as e:
+            print(f"Error forwarding producer→client: {e}")
 
+    # # Proxy bidireccional: cliente ⇄ producer
+    # try:
+    #     await asyncio.gather(client_to_producer(), producer_to_client())
+    # except WebSocketDisconnect:
+    #     pass
+    # finally:
+    #     try:
+    #         await prod_ws.send(json.dumps("bye"))
+    #     except Exception:
+    #         pass
+
+    #     if sign_ws.client_state != WebSocketState.DISCONNECTED:
+    #         await sign_ws.close()
+    #     await prod_ws.close()
+    #     print(f"🔌 Signaling WS closed for camera {camera_id}")
+
+    # ── Aquí sustituimos gather por wait(FIRST_COMPLETED) ──
+    client_task   = asyncio.create_task(client_to_producer())
+    producer_task = asyncio.create_task(producer_to_client())
+    done, pending = await asyncio.wait(
+        [client_task, producer_task],
+        return_when=asyncio.FIRST_COMPLETED,
+    )
+    # Cancelamos la tarea que quedó pendiente (para salir del bucle)
+    for task in pending:
+        task.cancel()
+
+    # ── Notificamos al productor que cierre su WebSocket ──
     try:
-        data = await websocket.receive_text()
-        message = json.loads(data)
+        await prod_ws.send(json.dumps({"type": "bye"}))
+    except Exception:
+        pass
 
-        async with httpx.AsyncClient() as client:
-            response = await client.post(f"{PRODUCER_URL}/negotiate", json={
-                "camera_name": camera_name,
-                "sdp": message["sdp"],
-                "type": message["type"]
-            })
+    # ── Ahora cerramos ambas conexiones ──
+    if sign_ws.client_state != WebSocketState.DISCONNECTED:
+        await sign_ws.close()
+    await prod_ws.close()
+    print(f"🔌 Signaling WS closed for camera {camera_id}")
 
-        answer = response.json()
-        await websocket.send_text(json.dumps(answer))
-
-        while True:
-            msg = await websocket.receive_text()
-            if msg.strip().lower() == "bye":
-                print(f"👋 BYE desde frontend: {camera_name}")
-                break
-
-    except WebSocketDisconnect:
-        print(f"⚠️ WebSocket desconectado: {camera_name}")
-    except Exception as e:
-        print(f"❌ Error en señalización: {e}")
-    finally:
-        if websocket.client_state != WebSocketState.DISCONNECTED:
-            await websocket.close()
-        print(f"🔌 Conexión cerrada: {camera_name}")
