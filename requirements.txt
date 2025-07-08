@@ -5,8 +5,8 @@ charset-normalizer==3.4.2
 click==8.1.8
 fastapi==0.115.12
 h11==0.16.0
-httptools==0.6.4
 httpcore==1.0.9
+httptools==0.6.4
 httpx==0.28.1
 idna==3.10
 pydantic==2.11.4
