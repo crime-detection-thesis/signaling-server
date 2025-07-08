@@ -1,5 +1,7 @@
-import asyncio, json
+import asyncio
+import json
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.websockets import WebSocketState
 from fastapi.middleware.cors import CORSMiddleware
 import websockets
 import httpx
@@ -15,19 +17,22 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
 
+
 @app.post("/start-camera")
 async def start_camera(data: dict):
     timeout = httpx.Timeout(60.0, connect=60.0)
-    
+
     async with httpx.AsyncClient(timeout=timeout) as client:
         try:
             response = await client.post(
                 f"{PRODUCER_HTTP_URL}/connect-camera",
-                json={"camera_id": data["camera_id"], "rtsp_url": data["rtsp_url"]},
+                json={"camera_id": data["camera_id"],
+                      "rtsp_url": data["rtsp_url"]},
                 timeout=60.0
             )
             response.raise_for_status()  # Lanza excepción para códigos 4XX/5XX
@@ -38,6 +43,7 @@ async def start_camera(data: dict):
         except Exception as e:
             print(f"Error inesperado: {e}")
             return {"status": "error", "message": "Error interno del servidor"}, 500
+
 
 @app.websocket("/ws/{camera_id}")
 async def websocket_endpoint(sign_ws: WebSocket, camera_id: int):
@@ -77,7 +83,7 @@ async def websocket_endpoint(sign_ws: WebSocket, camera_id: int):
     #     print(f"🔌 Signaling WS closed for camera {camera_id}")
 
     # ── Aquí sustituimos gather por wait(FIRST_COMPLETED) ──
-    client_task   = asyncio.create_task(client_to_producer())
+    client_task = asyncio.create_task(client_to_producer())
     producer_task = asyncio.create_task(producer_to_client())
     done, pending = await asyncio.wait(
         [client_task, producer_task],
@@ -98,4 +104,3 @@ async def websocket_endpoint(sign_ws: WebSocket, camera_id: int):
         await sign_ws.close()
     await prod_ws.close()
     print(f"🔌 Signaling WS closed for camera {camera_id}")
-
