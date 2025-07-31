@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import websockets
 import httpx
 
-from app.constants import PRODUCER_WS_URL, PRODUCER_HTTP_URL
+from app.constants import VIDEO_PRODUCER_WS_URL, VIDEO_GATEWAY_URL
 
 app = FastAPI()
 app.add_middleware(
@@ -30,12 +30,12 @@ async def start_camera(data: dict):
     async with httpx.AsyncClient(timeout=timeout) as client:
         try:
             response = await client.post(
-                f"{PRODUCER_HTTP_URL}/connect-camera",
+                f"{VIDEO_GATEWAY_URL}/connect-camera",
                 json={"camera_id": data["camera_id"],
                       "rtsp_url": data["rtsp_url"]},
                 timeout=60.0
             )
-            response.raise_for_status()  # Lanza excepción para códigos 4XX/5XX
+            response.raise_for_status()
             return {"status": "started"}
         except httpx.RequestError as e:
             print(f"Error al conectar con el productor: {e}")
@@ -52,7 +52,7 @@ async def websocket_endpoint(sign_ws: WebSocket, camera_id: int):
     max_retries = 10
     for attempt in range(max_retries):
         try:
-            prod_ws = await websockets.connect(f"{PRODUCER_WS_URL}/ws/{camera_id}")
+            prod_ws = await websockets.connect(f"{VIDEO_PRODUCER_WS_URL}/camera/ws/{camera_id}")
 
             try:
                 peek = await asyncio.wait_for(prod_ws.recv(), timeout=2.0)
