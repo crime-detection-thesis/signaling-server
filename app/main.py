@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import websockets
 import httpx
 
-from app.constants import VIDEO_PRODUCER_WS_URL, VIDEO_GATEWAY_URL
+from app.config import VIDEO_PRODUCER_WS_URL
 
 app = FastAPI()
 app.add_middleware(
@@ -30,7 +30,7 @@ async def start_camera(data: dict):
     async with httpx.AsyncClient(timeout=timeout) as client:
         try:
             response = await client.post(
-                f"{VIDEO_GATEWAY_URL}/connect-camera",
+                f"{data['video_gateway_url']}/connect-camera",
                 json={"camera_id": data["camera_id"],
                       "rtsp_url": data["rtsp_url"]},
                 timeout=60.0
